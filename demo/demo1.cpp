@@ -1,6 +1,6 @@
 #include <iostream>
 void e() {
-    std::cout<<"call d()\n";
+    std::cout<<"call e()\n";
 }
 void d() {
     std::cout<<"call d()\n";
@@ -13,7 +13,6 @@ void b() {
 }
 void a() {
     std::cout<<"call a()\n";
-
 }
 
 int main() {
@@ -25,6 +24,7 @@ int main() {
     b();
     c();
     d();
+    e();
     std::cout<<"byby\n";
     return 0;
 }
