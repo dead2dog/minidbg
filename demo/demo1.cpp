@@ -1,21 +1,30 @@
-void a() {
-    int foo = 1;
+#include <iostream>
+void e() {
+    std::cout<<"call d()\n";
 }
-
-void b() {
-    int foo = 2;
-    a();
+void d() {
+    std::cout<<"call d()\n";
 }
-
 void c() {
-    int foo = 3;
-    b();
+    std::cout<<"call c()\n";
+}
+void b() {
+    std::cout<<"call b()\n";
+}
+void a() {
+    std::cout<<"call a()\n";
+
 }
 
 int main() {
-    int d = 12;
-    int e = 20;
-    int f = d+e;
+    std::cout<<"demo1 start\n";
+    int f = 16;
+    int g = 16;
+    int h = f+g;
+    a();
+    b();
     c();
+    d();
+    std::cout<<"byby\n";
     return 0;
 }

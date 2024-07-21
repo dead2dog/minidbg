@@ -51,23 +51,28 @@ public:
     void run(); // 调试loop
     void set_breakpoint_at_address(std::intptr_t addr); // 通过地址设置断点
     void dump_registers(); // 打印全部寄存器的值
-    void single_step_instruction(); // 单步执行
+    void single_step_instruction(); // 指令级单步
     void set_breakpoint_at_function(const std::string& name); // 通过函数名设置断点
     void print_line(); // 打印下一条指令的行号
+    void step_in(); // 步入
+    void step_out(); // 跳出
+    void step_over(); // 越过
 
 private:
     void handle_command(const std::string& line);  // 命令控制器
     void cont_execution(); // 完成
-    auto get_pc() -> uint64_t; 
+    uint64_t get_pc(); 
     void set_pc(uint64_t pc);
     void step_over_breakpoint();
     void wait_for_signal();
-    auto read_memory(uint64_t address) -> uint64_t ;
+    uint64_t read_memory(uint64_t address);
     void write_memory(uint64_t address, uint64_t value);
-    auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
+    auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator; // 获取行条目
+    auto get_function_from_pc(uint64_t pc) -> dwarf::die; // 获取当前函数
     void initialise_load_address(); // 初始化加载地址
-    uint64_t offset_load_address(uint64_t addr); // 获得偏移量
-    uint64_t offset_dwarf_address(uint64_t addr); // 获得运行地址
+    void remove_breakpoint(std::intptr_t addr);
+    uint64_t sub_load_address(uint64_t addr); // 获得偏移量
+    uint64_t add_load_address(uint64_t addr); // 获得执行地址
     
     std::string m_prog_name; // 被调试路径
     pid_t m_pid; // 被调试pid
@@ -77,6 +82,71 @@ private:
     uint64_t m_load_address = 0x555555554000; // 加载地址
 };
 
+void debugger::step_in()
+{
+    auto line = get_line_entry_from_pc(sub_load_address(get_pc()))->line;
+    while (get_line_entry_from_pc(sub_load_address(get_pc()))->line == line) {
+        single_step_instruction();
+    }
+}
+void debugger::remove_breakpoint(std::intptr_t addr) {
+    if (m_breakpoints.at(addr).is_enabled()) {
+        m_breakpoints.at(addr).disable();
+    }
+    m_breakpoints.erase(addr);
+    std::cout<<"success delete breakpoint\n";
+}
+
+void debugger::step_out(){
+    auto frame_pointer = get_register_value(m_pid, reg::rbp); // 获取当前函数的基础地址
+    auto return_address = read_memory(frame_pointer+8); // 返回地址在基础地址的后八个字节
+    bool status = false;
+    if (!m_breakpoints.count(return_address)) {
+        set_breakpoint_at_address(return_address); // 在返回地址处设置断点
+        status = true;
+    }
+    cont_execution();
+    if (status) {
+        remove_breakpoint(return_address); // 移除返回地址上的断点
+    }
+}
+
+// 在当前函数每一行都设置断点
+void debugger::step_over() {
+    step_in();
+    step_in();
+    step_out();
+    // auto die = get_function_from_pc(sub_load_address(get_pc()));
+    // auto func_entry =at_low_pc(die);
+    // auto func_end = at_high_pc(die);
+
+    // auto line = get_line_entry_from_pc(func_entry);
+    // auto start_line = get_line_entry_from_pc(sub_load_address(get_pc()));
+
+    // std::vector<std::intptr_t> to_delete{};
+
+    // while (line->address < func_end) {
+    //     auto load_address = add_load_address(line->address);
+    //     if (line->address != start_line->address && !m_breakpoints.count(load_address)) {
+    //         set_breakpoint_at_address(load_address);
+    //         to_delete.push_back(load_address);
+    //     }
+    //     ++line;
+    // }
+
+    // auto frame_pointer = get_register_value(m_pid, reg::rbp);
+    // auto return_address = read_memory(frame_pointer+8);
+    // if (!m_breakpoints.count(return_address)) {
+    //     set_breakpoint_at_address(return_address);
+    //     to_delete.push_back(return_address);
+    // }
+
+    // cont_execution();
+
+    // for (auto addr : to_delete) {
+    //     remove_breakpoint(addr);
+    // }
+}
 void debugger::initialise_load_address() {
 
     std::string maps_file = "/proc/" + std::to_string(m_pid) + "/maps";
@@ -104,7 +174,7 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
                 // at_low_pc指向的不是函数代码的起始地址
                 // 而是指向prologue，用于执行保存和恢复堆栈、操作堆栈指针
                 ++entry; 
-                set_breakpoint_at_address(offset_dwarf_address(entry->address));
+                set_breakpoint_at_address(add_load_address(entry->address));
             }
         }
     }
@@ -112,7 +182,7 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
 
 
 void debugger::print_line(){
-    auto offset_pc = offset_load_address(get_pc()); //通过偏移量去查
+    auto offset_pc = sub_load_address(get_pc()); //通过偏移量去查
     auto line_entry = get_line_entry_from_pc(offset_pc);
     printf("0x%016lx %s:%d\n", line_entry->address, line_entry->file->path.c_str(), line_entry->line);
     return;
@@ -134,17 +204,33 @@ dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     throw std::out_of_range{"Cannot find line entry"};
 }
 
-uint64_t debugger::offset_load_address(uint64_t addr) {
+dwarf::die debugger::get_function_from_pc(uint64_t pc) {
+    for (auto &cu : m_dwarf.compilation_units()) {
+        if (die_pc_range(cu.root()).contains(pc)) {
+            for (const auto& die : cu.root()) {
+                if (die.tag == dwarf::DW_TAG::subprogram) {
+                    if (die_pc_range(die).contains(pc)) {
+                        return die;
+                    }
+                }
+            }
+        }
+    }
+
+    throw std::out_of_range{"Cannot find function"};
+}
+
+uint64_t debugger::sub_load_address(uint64_t addr) {
    return addr - m_load_address;
 }
 
-uint64_t debugger::offset_dwarf_address(uint64_t addr) {
+uint64_t debugger::add_load_address(uint64_t addr) {
    return addr + m_load_address;
 }
 
 void debugger::single_step_instruction() {
     // 检查是否遇见断点
-    if (m_breakpoints.count(get_pc()-1)) {
+    if (m_breakpoints.count(get_pc())) {
         step_over_breakpoint();
     }
     else { //没遇见
@@ -161,15 +247,9 @@ void debugger::set_pc(uint64_t pc) {
     set_register_value(m_pid, reg::rip, pc);
 }
 void debugger::step_over_breakpoint() {
-    auto possible_breakpoint_location = get_pc() - 1; // pc指的是下一条指令，我们需要断点的指令
-
-    if (m_breakpoints.count(possible_breakpoint_location)) {
-        auto& bp = m_breakpoints[possible_breakpoint_location];
-
+    if (m_breakpoints.count(get_pc())) {
+        auto& bp = m_breakpoints[get_pc()];
         if (bp.is_enabled()) {
-            auto previous_instruction_address = possible_breakpoint_location;
-            set_pc(previous_instruction_address);
-
             bp.disable();
             ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
             wait_for_signal();
@@ -181,6 +261,16 @@ void debugger::step_over_breakpoint() {
 void debugger::wait_for_signal() {
     int wait_status;
     waitpid(m_pid, &wait_status, 0);
+
+    siginfo_t siginfo;
+    ptrace(PTRACE_GETSIGINFO, m_pid, nullptr, &siginfo);
+
+    // 触发断点
+    if(siginfo.si_code == SI_KERNEL || siginfo.si_code == TRAP_BRKPT){
+        set_pc(get_pc()-1);  // 设置pc为断点处地址
+        std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
+        print_line();
+    }
 }
 void debugger::dump_registers() {
     for (int i = 0; i <= static_cast<int>(reg::gs_base); ++i) {
@@ -207,7 +297,7 @@ void debugger::handle_command(const std::string& line) {
     auto args = split(line,' ');
     auto command = args[0];
 
-    if (is_prefix(command, "cont")) { // 恢复运行
+    if (is_prefix(command, "cont")) { // 恢复执行 
         cont_execution();
     }
     else if(is_prefix(command, "go")) { // 开始执行
@@ -231,7 +321,7 @@ void debugger::handle_command(const std::string& line) {
             std::cout << get_register_value(m_pid, get_register_from_name(args[2])) << std::endl;
         }
         else if (is_prefix(args[1], "write")) {
-            std::string val {args[3], 2}; //去掉前面的"0x"
+            std::string val {args[3], 2};
             set_register_value(m_pid, get_register_from_name(args[2]), std::stol(val, 0, 16));
         }
     }
@@ -246,10 +336,18 @@ void debugger::handle_command(const std::string& line) {
             write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
         }
     }
-    else if(is_prefix(command, "next")) {
-        single_step_instruction();
+    else if(is_prefix(command, "step")) {
+        step_in();
     }
-    else if(is_prefix(command, "show")){
+
+    else if(is_prefix(command, "next")) {
+        step_over();
+    }
+
+    else if(is_prefix(command, "out")) {
+        step_out();
+    }
+    else if(is_prefix(command, "show")){ // 打印文件名+行号
         print_line();
     }
     else {
