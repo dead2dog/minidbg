@@ -94,7 +94,6 @@ void debugger::remove_breakpoint(std::intptr_t addr) {
         m_breakpoints.at(addr).disable();
     }
     m_breakpoints.erase(addr);
-    std::cout<<"success delete breakpoint\n";
 }
 
 void debugger::step_out(){
@@ -318,7 +317,7 @@ void debugger::handle_command(const std::string& line) {
             dump_registers();
         }
         else if (is_prefix(args[1], "read")) {
-            std::cout << get_register_value(m_pid, get_register_from_name(args[2])) << std::endl;
+            std::cout << std::hex<<get_register_value(m_pid, get_register_from_name(args[2])) << std::endl;
         }
         else if (is_prefix(args[1], "write")) {
             std::string val {args[3], 2};
@@ -336,15 +335,13 @@ void debugger::handle_command(const std::string& line) {
             write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
         }
     }
-    else if(is_prefix(command, "step")) {
+    else if(is_prefix(command, "step")) { // 步入
         step_in();
     }
-
-    else if(is_prefix(command, "next")) {
+    else if(is_prefix(command, "next")) { // 跳出
         step_over();
     }
-
-    else if(is_prefix(command, "out")) {
+    else if(is_prefix(command, "out")) { // 越过
         step_out();
     }
     else if(is_prefix(command, "show")){ // 打印文件名+行号
@@ -355,8 +352,9 @@ void debugger::handle_command(const std::string& line) {
     }
 }
 void debugger::run() {
-    wait_for_signal();
-    initialise_load_address();
+    int wait_status;
+    waitpid(m_pid, &wait_status, 0);
+    initialise_load_address(); // 初始化进程地址空间
 
     char* line = nullptr;
     while((line = linenoise("(Debugger) > ")) != nullptr) {

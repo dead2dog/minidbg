@@ -10,6 +10,10 @@ add_executable(minidbg src/minidbg.cpp ext/linenoise/linenoise.c)
 add_executable(demo1 demo/demo1.cpp)
 set_target_properties(demo1
                       PROPERTIES COMPILE_FLAGS "-gdwarf-2 -g -O0")
+               
+add_executable(demo2 demo/demo2.cpp)
+set_target_properties(demo2
+                      PROPERTIES COMPILE_FLAGS "-gdwarf-2 -g -O0")
 
 add_custom_target(
    libelfin
